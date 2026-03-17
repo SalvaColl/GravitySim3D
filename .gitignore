@@ -1,0 +1,31 @@
+# Compiled Object files
+*.o
+*.obj
+
+# Compiled Executables
+*.exe
+*.out
+*.app
+
+# Debug and Profiling files
+*.pdb
+*.ilk
+*.map
+
+# IDE and Editor folders
+.vscode/
+.vs/
+*.suo
+*.user
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
