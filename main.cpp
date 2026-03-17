@@ -48,17 +48,18 @@ const double LUNAR_DISTANCE = 384'400'000.0;
 const double LUNAR_VELOCITY = 1'022.0;
 
 // --- GRAPHICS SCALING ---
-// 1 unit in OpenGL = 10,000,000 meters in real life.
 const double DISTANCE_SCALE = 1e7;
 const double RADIUS_SCALE = 1.0;
 double PLANET_RADIUS_SCALE = 8.0;
 double TIME_SCALE = 100'000.0;
 double TOP_VIEW_SCALE = 1.0;
 
+// --- CAMMERA STATE --- 
 int cameraState = 0; // -1 free cam, >= 0 locked
+bool drawingOrbit = false;
+int orbitState = -1; // -1 not drawing, >= 0 drawing
 float yaw = -90.0f;
 float pitch = -89.0f; // avoid 90 or -90
-const std::string bodyNames[] = {"SUN", "MERCURY", "VENUS", "EARTH", "MOON"};
 
 glm::vec3 cameraPos;
 // Where the camera is looking
@@ -98,7 +99,9 @@ class Object {
         glm::vec4 color;
         float renderRadius;
         bool planet;
-        
+        std::vector<glm::vec3> trail;
+        GLuint trailVAO, trailVBO;
+        bool isOrbitComplete = false;
 
         Object(glm::dvec3 initPosition, glm::dvec3 initVelocity, double mass, double realRadius, glm::vec4 initColor, bool planet) {
             this->position = initPosition;
@@ -110,6 +113,20 @@ class Object {
             
             // Scale the real radius down so OpenGL can draw it
             this->renderRadius = static_cast<float>(realRadius / DISTANCE_SCALE) * RADIUS_SCALE; 
+
+            // Generate buffers for the trail
+            glGenVertexArrays(1, &trailVAO);
+            glGenBuffers(1, &trailVBO);
+
+            // Bind them and set the data format
+            glBindVertexArray(trailVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, trailVBO);
+            
+            // 3 floats per point
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
+            glEnableVertexAttribArray(0);
+            
+            glBindVertexArray(0);
         }
 
         void Accelerate(double accelX, double accelY, double accelZ, double timeStep) {
@@ -120,6 +137,37 @@ class Object {
         void UpdatePos(double timeStep) {
             this->position += this->velocity * timeStep;
         }
+
+        void RecordTrailPoint() {
+            glm::vec3 scaledPos(
+                position.x / DISTANCE_SCALE,
+                position.y / DISTANCE_SCALE,
+                position.z / DISTANCE_SCALE
+            );
+
+            // Only add a point if we moved far enough (0.5 units)
+            // This is to avoid problems with very small Time Scales
+            if (trail.empty() || glm::length(scaledPos - trail.back()) > 0.5f) {
+                trail.push_back(scaledPos);
+
+                glBindVertexArray(trailVAO);
+                glBindBuffer(GL_ARRAY_BUFFER, trailVBO);
+                glBufferData(GL_ARRAY_BUFFER, trail.size() * sizeof(glm::vec3), trail.data(), GL_DYNAMIC_DRAW);
+
+                // Check if we have completed the orbit
+                if (trail.size() > 100) {
+                    if (glm::length(scaledPos - trail[0]) < 0.6f) {
+                        isOrbitComplete = true;
+                    }
+                }
+            }
+        }
+
+        void ClearTrail() {
+            trail.clear();
+            isOrbitComplete = false;
+        }
+
         // Not used right now
         float Collisions(Object& other) {
             float dx = other.position[0] - this->position[0];
@@ -169,6 +217,7 @@ size_t GenerateUnitSphere(GLuint& VAO, GLuint& VBO) {
 }
 
 std::vector<Object> objs = {};
+const std::string bodyNames[] = {"SUN", "MERCURY", "VENUS", "EARTH", "MOON"};
 
 int main() {
     GLFWwindow* window = StartGLU();
@@ -226,7 +275,7 @@ int main() {
     GLuint sphereVAO, sphereVBO;
     size_t sphereVertexCount = GenerateUnitSphere(sphereVAO, sphereVBO);
 
-   while (!glfwWindowShouldClose(window) && running == true) {
+    while (!glfwWindowShouldClose(window) && running == true) {
         processInput(window);
 
         // Display coordinates
@@ -263,28 +312,31 @@ int main() {
         }
 
         // Gravity
-        for(auto& obj : objs) {
-            // Calculate the total gravitational pull on this object
+        for(size_t i = 0; i < objs.size(); i++) {
             glm::dvec3 totalAcceleration(0.0);
-            
-            for(auto& obj2 : objs) {
-                if(&obj != &obj2) {
-                    glm::dvec3 diff = obj2.position - obj.position;
+            // Calculate total gravitational pull
+            for(size_t j = 0; j < objs.size(); j++) {
+                if(i != j) {
+                    glm::dvec3 diff = objs[j].position - objs[i].position;
                     double distance = glm::length(diff);
                     
-                    if (distance > 0.1) { // I don't like dividing by 0
+                    if (distance > 0.1) { // Avoid division by 0
                         glm::dvec3 direction = glm::normalize(diff);
-                        // F = G(m1 * m2) / r^2
-                        double force = (G * obj.mass * obj2.mass) / (distance * distance);
-                        double accel = force / obj.mass;
+                        // F = G*m1*m2/r^2
+                        double force = (G * objs[i].mass * objs[j].mass) / (distance * distance);
+                        double accel = force / objs[i].mass;
                         totalAcceleration += direction * accel;
                     }
                 }
             }
 
-            double timeStep = deltaTime * TIME_SCALE; // Speed up time
-            obj.Accelerate(totalAcceleration.x, totalAcceleration.y, totalAcceleration.z, timeStep);
-            obj.UpdatePos(timeStep);
+            double timeStep = deltaTime * TIME_SCALE; 
+            objs[i].Accelerate(totalAcceleration.x, totalAcceleration.y, totalAcceleration.z, timeStep);
+            objs[i].UpdatePos(timeStep);
+
+            if (drawingOrbit && orbitState == i && !objs[i].isOrbitComplete) {
+                objs[i].RecordTrailPoint();
+            }
         }
 
         // --- CAMERA TRACKING ---
@@ -343,6 +395,16 @@ int main() {
             // Draw the currently bound VAO
             glDrawArrays(GL_TRIANGLES, 0, sphereVertexCount / 3);
         }
+
+        if (drawingOrbit && orbitState != -1 && objs[orbitState].trail.size() >= 2) {
+            glUniform4f(objectColorLoc, objs[orbitState].color.r, objs[orbitState].color.g, objs[orbitState].color.b, objs[orbitState].color.a);
+            
+            glm::mat4 model = glm::mat4(1.0f);
+            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
+
+            glBindVertexArray(objs[orbitState].trailVAO);
+            glDrawArrays(GL_LINE_STRIP, 0, objs[orbitState].trail.size());
+        }
         
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -352,6 +414,11 @@ int main() {
 
     glDeleteVertexArrays(1, &sphereVAO);
     glDeleteBuffers(1, &sphereVBO);
+
+    for (auto& obj : objs) {
+        glDeleteVertexArrays(1, &obj.trailVAO);
+        glDeleteBuffers(1, &obj.trailVBO);
+    }
 
     glDeleteProgram(shaderProgram);
     glfwTerminate();
@@ -495,8 +562,8 @@ void processInput(GLFWwindow* window) {
 }
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-
     // One action inputs
+
     // Time Scale
     if (key == GLFW_KEY_UP && action == GLFW_PRESS) {
         TIME_SCALE += 100000;
@@ -558,6 +625,25 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
             title += + " | CURRENT BODY: " + bodyNames[cameraState/2];
         }        
         glfwSetWindowTitle(window, title.c_str());
+    }
+
+    // Orbit Drawing
+    if (key == GLFW_KEY_R && action == GLFW_PRESS) {
+        if (cameraState != -1) {
+            int targetIdx = cameraState / 2;
+            
+            // If we press R on the planet we are already drawing, toggle it OFF and erase
+            if (drawingOrbit && orbitState == targetIdx) {
+                drawingOrbit = false;
+                objs[targetIdx].ClearTrail();
+            } else {
+                // If we press R on a NEW planet, clear the old one and start drawing
+                if (orbitState != -1) objs[orbitState].ClearTrail();
+                drawingOrbit = true;
+                orbitState = targetIdx;
+                objs[targetIdx].ClearTrail();
+            }
+        }
     }
 }
 
