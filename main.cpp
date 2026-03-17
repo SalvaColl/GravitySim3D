@@ -7,6 +7,8 @@
 #include <iostream>
 #define _USE_MATH_DEFINES
 #include <cmath>
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
 
 
 const char* vertexShaderSource = R"glsl(
@@ -48,17 +50,22 @@ const double LUNAR_VELOCITY = 1022.0;
 // 1 unit in OpenGL = 10,000,000 meters in real life.
 const double DISTANCE_SCALE = 1e7;
 const double RADIUS_SCALE = 1.0;
-const double PLANET_RADIUS_SCALE = 10.0;
+double PLANET_RADIUS_SCALE = 8.0;
 double TIME_SCALE = 100000.0;
+double TOP_VIEW_SCALE = 1.0;
+
+int cameraState = 0; // -1 free cam, 0-5 locked
+float yaw = -90.0f;
+float pitch = -89.0f;
 
 glm::vec3 cameraPos;
-glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
-glm::vec3 cameraUp    = glm::vec3(0.0f, 1.0f,  0.0f);
+// Where I am looking
+glm::vec3 cameraFront;
+// To know which way is up and down
+glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
+
 float lastX = 600.0f, lastY = 600.0f;
 bool firstMouse = true;           
-float yaw = -90;
-float pitch = 0.0;
-int lockedTarget = 0; // -1 free cam, 0 Sun, 1 Earth
 
 bool running = true;
 float deltaTime = 0.0;
@@ -91,6 +98,7 @@ class Object {
         size_t vertexCount;
         glm::vec4 color;
         float renderRadius;
+        bool planet;
         
 
         Object(glm::dvec3 initPosition, glm::dvec3 initVelocity, double mass, double realRadius, glm::vec4 initColor, bool planet) {
@@ -99,41 +107,19 @@ class Object {
             this->mass = mass;
             this->realRadius = realRadius;
             this->color = initColor;
+            this->planet = planet;
             
             // Scale the real radius down so OpenGL can draw it
             this->renderRadius = static_cast<float>(realRadius / DISTANCE_SCALE) * RADIUS_SCALE; 
-            if(planet) this->renderRadius *= PLANET_RADIUS_SCALE;
             std::vector<float> vertices = Draw();
             vertexCount = vertices.size();
             CreateVBOVAO(VAO, VBO, vertices.data(), vertexCount);
         }
 
-        /*std::vector<float> Draw() {
-            std::vector<float> vertices;
-
-            float centerX = this->position[0];
-            float centerY = this->position[1];
-
-            float leftX = -cos(M_PI/6.0)*this->radius;
-            float leftY = -sin(M_PI/6.0)*this->radius;
-
-            float rightX = cos(M_PI/6.0)*this->radius;
-            float rightY = leftY;
-
-            float topX = 0.0f;
-            float topY = 0.0f + this->radius;
-
-            vertices.insert(vertices.end(), {leftX, leftY, 0.0f});
-            vertices.insert(vertices.end(), {rightX, rightY, 0.0f});
-            vertices.insert(vertices.end(), {topX, topY, 0.0f});
-            return vertices;
-        }*/
-
         std::vector<float> Draw() {
             std::vector<float> vertices;
-            int stacks = 50;
-            int sectors = 50;
-
+            int stacks = 30;
+            int sectors = 30;
             // Get the triangles to form the sphere
             for(float i = 0.0f; i <= stacks; ++i){
                 float theta1 = (i / stacks) * glm::pi<float>();
@@ -193,32 +179,45 @@ int main() {
     GLint objectColorLoc = glGetUniformLocation(shaderProgram, "objectColor");
     glUseProgram(shaderProgram);
 
+    
     glfwSetKeyCallback(window, key_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetScrollCallback(window, scroll_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io; 
 
+    ImGui::StyleColorsDark();
+
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init("#version 130");
+    
     glm::mat4 projection = glm::perspective(glm::radians(45.0f), 1.0f, 0.1f, 750000.0f);
     GLint projectionLoc = glGetUniformLocation(shaderProgram, "projection");
     glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(projection));
     cameraPos = glm::vec3(0.0f, 0.0f, 0.0f);
-
-    /*objs = {
-        Object(glm::dvec3(0,0,0), glm::vec3(0,0,0), 10.0f, 0.40f, glm::vec4(1.0f, 0.0f, 0.0f, 1.0f)),
-        Object(glm::dvec3(1,0,0), glm::dvec3(0,0,0), 10.0f, 0.40f, glm::vec4(1.0f, 0.0f, 0.0f, 1.0f))
-    };*/
+    glm::vec3 front;
+    front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
+    front.y = sin(glm::radians(pitch));
+    front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+    cameraFront = glm::normalize(front);
 
     objs = {
-        // SUN: Center (0,0,0), Zero velocity, Sun Mass, Sun Radius, Yellow color, Scale
+        // SUN
         Object(glm::dvec3(0.0, 0.0, 0.0), glm::dvec3(0.0, 0.0, 0.0), SUN_MASS, 696340000.0, glm::vec4(1.0f, 1.0f, 0.0f, 1.0f), false),
         
-        // EARTH: 1 AU away on X-axis, orbital velocity on Z-axis, Earth Mass, Earth Radius, Blue color, Scale
-        // Earth's orbital velocity is roughly 29,780 m/s
+        // MERCURY
+        Object(glm::dvec3(0.387 * AU, 0.0, 0.0), glm::dvec3(0.0, 0.0, 47360.0), 3.301e23, 2439700.0, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f), true),
+        
+        // VENUS
+        Object(glm::dvec3(0.723 * AU, 0.0, 0.0), glm::dvec3(0.0, 0.0, 35020.0), 4.867e24, 6051800.0, glm::vec4(1.0f, 0.7f, 0.3f, 1.0f), true),
+
+        // EARTH:
         Object(glm::dvec3(AU, 0.0, 0.0), glm::dvec3(0.0, 0.0, 29780.0), EARTH_MASS, EARTH_RADIUS, glm::vec4(0.0f, 0.5f, 1.0f, 1.0f), true),
 
         // MOON:
-        // Position: Earth's X + Lunar Distance. 
-        // Velocity: Earth's Z + Lunar Velocity.
         Object(glm::dvec3(AU + LUNAR_DISTANCE, 0.0, 0.0), glm::dvec3(0.0, 0.0, 29780.0 + LUNAR_VELOCITY), MOON_MASS, MOON_RADIUS, glm::vec4(0.7f, 0.7f, 0.7f, 1.0f), true)
     };
 
@@ -227,13 +226,29 @@ int main() {
 
     while (!glfwWindowShouldClose(window) && running == true) {
         processInput(window);
+
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+        ImGui::SetNextWindowSize(ImVec2(250, 0), ImGuiCond_Once);
+        ImGui::Begin("Simulation Data");
+
+        ImGui::SetWindowFontScale(1.5f); 
+
+        ImGui::Text("Camera Coordinates:");
+        ImGui::Text("X: %.1f", cameraPos.x);
+        ImGui::Text("Y: %.1f", cameraPos.y);
+        ImGui::Text("Z: %.1f", cameraPos.z);
+
+        ImGui::End();
+
         float currentFrame = glfwGetTime();
         deltaTime = currentFrame - lastFrame;
         lastFrame = currentFrame;
 
         frameCount++;
         if(currentFrame - previousTime >= 1.0) {
-            std::string title = "GRAVITY SIM | FPS: " + std::to_string(frameCount) + " | TIME SCALE: " + std::to_string(TIME_SCALE);
+            std::string title = "GRAVITY SIM | FPS: " + std::to_string(frameCount) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);
             glfwSetWindowTitle(window, title.c_str());
             fps = frameCount;
             frameCount = 0;
@@ -241,21 +256,30 @@ int main() {
         }
 
         // --- CAMERA TRACKING ---
-        if (lockedTarget != -1) {
-            // Get the target's current scaled position
+        if (cameraState != -1) {
+            int targetIdx = cameraState / 2;      
+            bool isTopView = (cameraState % 2 == 0); 
+        
             glm::vec3 targetPos = glm::vec3(
-                objs[lockedTarget].position.x / DISTANCE_SCALE,
-                objs[lockedTarget].position.y / DISTANCE_SCALE,
-                objs[lockedTarget].position.z / DISTANCE_SCALE
+                objs[targetIdx].position.x / DISTANCE_SCALE,
+                objs[targetIdx].position.y / DISTANCE_SCALE,
+                objs[targetIdx].position.z / DISTANCE_SCALE
             );
             
-            if (lockedTarget == 1) {
-                // Top-down Earth View: 3x Lunar Distance on the Y-Axis
-                float moonViewDist = (LUNAR_DISTANCE / DISTANCE_SCALE) * 3.0f;
-                cameraPos = targetPos + glm::vec3(0.0f, moonViewDist, 0.0f);
+            // Actual render size right now
+            float currentVisualRadius = objs[targetIdx].renderRadius;
+            if (objs[targetIdx].planet) currentVisualRadius *= PLANET_RADIUS_SCALE;
+
+            if (isTopView) {
+                float viewDist;
+                if (targetIdx == 0) viewDist = (AU / DISTANCE_SCALE) * 3.0f; // Sun Top View
+                else if (targetIdx == 1) viewDist = (LUNAR_DISTANCE / DISTANCE_SCALE) * 5.0f; // Earth Top View
+                else viewDist = (LUNAR_DISTANCE / DISTANCE_SCALE) * 5.0f; // Moon Top View
+                
+                cameraPos = targetPos + glm::vec3(0.0f, viewDist, 0.0f);
             } else {
-                // Other views
-                cameraPos = targetPos + glm::vec3(0.0f, 0.0f, objs[lockedTarget].renderRadius * 3.0f);
+                // Side View for any object
+                cameraPos = targetPos + glm::vec3(0.0f, 0.0f, currentVisualRadius * 3.0f);
             }
         }
 
@@ -265,7 +289,7 @@ int main() {
         for(auto& obj : objs) {
             glUniform4f(objectColorLoc, obj.color.r, obj.color.g, obj.color.b, obj.color.a);
 
-            // 1. Calculate the total gravitational pull on this object
+            // Calculate the total gravitational pull on this object
             glm::dvec3 totalAcceleration(0.0);
             
             for(auto& obj2 : objs) {
@@ -287,7 +311,7 @@ int main() {
             obj.Accelerate(totalAcceleration.x, totalAcceleration.y, totalAcceleration.z, timeStep);
             obj.UpdatePos(timeStep);
 
-            // 2. Scale down for OpenGL drawing
+            // Scale down for drawing
             glm::vec3 scaledPosition(
                 obj.position.x / DISTANCE_SCALE,
                 obj.position.y / DISTANCE_SCALE,
@@ -296,12 +320,18 @@ int main() {
 
             glm::mat4 model = glm::mat4(1.0f);
             model = glm::translate(model, scaledPosition); 
+
+            if(obj.planet) {
+                model = glm::scale(model, glm::vec3(PLANET_RADIUS_SCALE));
+            }
+
             glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
             
             glBindVertexArray(obj.VAO);
             glDrawArrays(GL_TRIANGLES, 0, obj.vertexCount / 3);
         }
-        
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
@@ -421,31 +451,33 @@ void UpdateCam(GLuint shaderProgram, glm::vec3 cameraPos) {
 
 void processInput(GLFWwindow* window) {
     float cameraSpeed = 1250.0f * deltaTime;
-    
     // Continuous inputs, check what is happening right now
+    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
+        cameraSpeed *= 5.0f;
+    }
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
         cameraPos += cameraSpeed * cameraFront;
-        lockedTarget = -1;
+        cameraState = -1;
     }
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
         cameraPos -= cameraSpeed * cameraFront;
-        lockedTarget = -1;
+        cameraState = -1;
     }
     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
         cameraPos -= cameraSpeed * glm::normalize(glm::cross(cameraFront, cameraUp));
-        lockedTarget = -1;
+        cameraState = -1;
     }
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
         cameraPos += cameraSpeed * glm::normalize(glm::cross(cameraFront, cameraUp));
-        lockedTarget = -1;
+        cameraState = -1;
     }
     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
         cameraPos += cameraSpeed * cameraUp;
-        lockedTarget = -1;
+        cameraState = -1;
     }
     if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
         cameraPos -= cameraSpeed * cameraUp;
-        lockedTarget = -1;
+        cameraState = -1;
     }
     if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS){
         glfwSetWindowShouldClose(window, true);
@@ -453,77 +485,58 @@ void processInput(GLFWwindow* window) {
 }
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-    // One press inputs
-    
-    /*if(key == GLFW_KEY_F && action == GLFW_PRESS) {
-        static float spawnOffset = 1.0f;
-        Object newSphere = Object(glm::vec3(spawnOffset, 0, 0), glm::vec3(0, 0, 0), 0.40f, 10.0f);
-        objs.emplace_back(newSphere);
-        spawnOffset += 1.0f;
-    }*/
 
-    if(key == GLFW_KEY_E && action == GLFW_PRESS) {
-        lockedTarget = 1; // Lock to Earth
-        
-        yaw = -90.0f;
-        pitch = -89.0f; // -90 might cause Gimbal Lock
-        
-        glm::vec3 front;
-        front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
-        front.y = sin(glm::radians(pitch));
-        front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
-        cameraFront = glm::normalize(front);
-    }
-
-    if(key == GLFW_KEY_C && action == GLFW_PRESS) {
-        lockedTarget = 0; // Lock to Sun
-        
-        yaw = -90.0f;
-        pitch = 0.0f;
-        glm::vec3 front;
-        front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
-        front.y = sin(glm::radians(pitch));
-        front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
-        cameraFront = glm::normalize(front);
-    }
-
-    if(key == GLFW_KEY_Z && action == GLFW_PRESS) {
-        lockedTarget = -1;
-        cameraPos = glm::vec3(0.0f, AU/DISTANCE_SCALE * 3.0f, 0.0f);
-        yaw = -90.0f;
-        pitch = -89.0f;
-        glm::vec3 front;
-        front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
-        front.y = sin(glm::radians(pitch));
-        front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
-        cameraFront = glm::normalize(front);
-    }
-
-    // Adjust time scales
+    // One action inputs
+    // Time Scale
     if (key == GLFW_KEY_UP && action == GLFW_PRESS) {
-        TIME_SCALE += 10000;
-        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE);
+        TIME_SCALE += 100000;
+        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);;
         glfwSetWindowTitle(window, title.c_str());
     }
     if (key == GLFW_KEY_DOWN && action == GLFW_PRESS) {
-        TIME_SCALE -= 10000;
-        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE);
-        glfwSetWindowTitle(window, title.c_str());
-    }
-    if (key == GLFW_KEY_RIGHT && action == GLFW_PRESS) {
-        TIME_SCALE += 100000;
-        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE);
-        glfwSetWindowTitle(window, title.c_str());
-    }
-    if (key == GLFW_KEY_LEFT && action == GLFW_PRESS) {
         TIME_SCALE -= 100000;
-        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE);
+        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);;
         glfwSetWindowTitle(window, title.c_str());
+    }
+
+    // Planet Radius Scale
+    if (key == GLFW_KEY_9 && action == GLFW_PRESS) {
+        PLANET_RADIUS_SCALE *= 2.0;
+        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);;
+        glfwSetWindowTitle(window, title.c_str());
+    }
+    if (key == GLFW_KEY_2 && action == GLFW_PRESS) {
+        PLANET_RADIUS_SCALE /= 2.0;
+        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);;
+        glfwSetWindowTitle(window, title.c_str());
+    }
+
+    // Camera State 
+    if ((key == GLFW_KEY_RIGHT || key == GLFW_KEY_LEFT) && action == GLFW_PRESS) {
+        // Change the 6 to 10 (5 objects * 2 views each)
+        if (key == GLFW_KEY_RIGHT) {
+            if (cameraState == -1) cameraState = 0;
+            else cameraState = (cameraState + 1) % 10; 
+        } else {
+            if (cameraState == -1) cameraState = 9;
+            else cameraState = (cameraState - 1 + 10) % 10; 
+        }
+
+        bool isTopView = (cameraState % 2 == 0);
+        
+        yaw = -90.0f;
+        pitch = isTopView ? -89.0f : 0.0f; 
+
+        glm::vec3 front;
+        front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
+        front.y = sin(glm::radians(pitch));
+        front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+        cameraFront = glm::normalize(front);
     }
 }
 
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset){
-    float cameraSpeed = 5000.0f * deltaTime;
+    float cameraSpeed = 50000.0f * deltaTime;
     if(yoffset>0){
         cameraPos += cameraSpeed * cameraFront;
     } else if(yoffset<0){
@@ -532,7 +545,6 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset){
 }
 
 void mouse_callback(GLFWwindow* window, double xposIn, double yposIn) {
-
     float xpos = static_cast<float>(xposIn);
     float ypos = static_cast<float>(yposIn);
 
