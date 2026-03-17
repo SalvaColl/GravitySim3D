@@ -134,7 +134,7 @@ class Object {
             int stacks = 50;
             int sectors = 50;
 
-            // generate circumference points using integer steps
+            // Get the triangles to form the sphere
             for(float i = 0.0f; i <= stacks; ++i){
                 float theta1 = (i / stacks) * glm::pi<float>();
                 float theta2 = (i+1) / stacks * glm::pi<float>();
@@ -254,7 +254,7 @@ int main() {
                 float moonViewDist = (LUNAR_DISTANCE / DISTANCE_SCALE) * 3.0f;
                 cameraPos = targetPos + glm::vec3(0.0f, moonViewDist, 0.0f);
             } else {
-                // Sun view (or anything else)
+                // Other views
                 cameraPos = targetPos + glm::vec3(0.0f, 0.0f, objs[lockedTarget].renderRadius * 3.0f);
             }
         }
@@ -273,7 +273,7 @@ int main() {
                     glm::dvec3 diff = obj2.position - obj.position;
                     double distance = glm::length(diff);
                     
-                    if (distance > 0.1) { // Prevent division by zero
+                    if (distance > 0.1) { // I don't like dividing by 0
                         glm::dvec3 direction = glm::normalize(diff);
                         // F = G(m1 * m2) / r^2
                         double force = (G * obj.mass * obj2.mass) / (distance * distance);
@@ -406,7 +406,7 @@ void CreateVBOVAO(GLuint& VAO, GLuint& VBO, const float* vertices, size_t vertex
 
 glm::vec3 sphericalToCartesian(float r, float theta, float phi){
     float y = r * cos(theta);
-    // r * sin(theta) is the radius of the disk
+    // r * sin(theta) is the radius of the current disk of the sphere
     float x = r * sin(theta) * cos(phi);
     float z = r * sin(theta) * sin(phi);
     return glm::vec3(x, y, z);
@@ -422,7 +422,7 @@ void UpdateCam(GLuint shaderProgram, glm::vec3 cameraPos) {
 void processInput(GLFWwindow* window) {
     float cameraSpeed = 1250.0f * deltaTime;
     
-    // Continuous inputs, check what is happening right now and act
+    // Continuous inputs, check what is happening right now
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
         cameraPos += cameraSpeed * cameraFront;
         lockedTarget = -1;
@@ -453,7 +453,7 @@ void processInput(GLFWwindow* window) {
 }
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-    // PRESSING ONE TIME
+    // One press inputs
     
     /*if(key == GLFW_KEY_F && action == GLFW_PRESS) {
         static float spawnOffset = 1.0f;
@@ -466,7 +466,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         lockedTarget = 1; // Lock to Earth
         
         yaw = -90.0f;
-        pitch = -89.0f; // Look almost straight down to prevent Gimbal Lock!
+        pitch = -89.0f; // -90 might cause Gimbal Lock
         
         glm::vec3 front;
         front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
@@ -491,7 +491,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         lockedTarget = -1;
         cameraPos = glm::vec3(0.0f, AU/DISTANCE_SCALE * 3.0f, 0.0f);
         yaw = -90.0f;
-        pitch = -90.0f;
+        pitch = -89.0f;
         glm::vec3 front;
         front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
         front.y = sin(glm::radians(pitch));
@@ -499,6 +499,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         cameraFront = glm::normalize(front);
     }
 
+    // Adjust time scales
     if (key == GLFW_KEY_UP && action == GLFW_PRESS) {
         TIME_SCALE += 10000;
         std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE);
