@@ -36,30 +36,32 @@ void main() {
     FragColor = vec4(objectColor.rgb * diff, objectColor.a);
 })glsl";
 
-const double G = 6.6743e-11; // Gravitational constant
+// --- PHYSICS CONSTANTS AND DATA ---
+const double G = 6.6743e-11; 
 const double SUN_MASS = 1.989e30; 
 const double EARTH_MASS = 5.972e24;
-const double EARTH_RADIUS = 6371000.0; // In meters
-const double AU = 149597870700.0;
-const double MOON_RADIUS = 1737000.0;
+const double EARTH_RADIUS = 6'371'000.0; 
+const double AU = 149'597'870'700.0;
+const double MOON_RADIUS = 1'737'000.0;
 const double MOON_MASS = 7.347e22;
-const double LUNAR_DISTANCE = 384400000.0;
-const double LUNAR_VELOCITY = 1022.0;
+const double LUNAR_DISTANCE = 384'400'000.0;
+const double LUNAR_VELOCITY = 1'022.0;
 
 // --- GRAPHICS SCALING ---
 // 1 unit in OpenGL = 10,000,000 meters in real life.
 const double DISTANCE_SCALE = 1e7;
 const double RADIUS_SCALE = 1.0;
 double PLANET_RADIUS_SCALE = 8.0;
-double TIME_SCALE = 100000.0;
+double TIME_SCALE = 100'000.0;
 double TOP_VIEW_SCALE = 1.0;
 
-int cameraState = 0; // -1 free cam, 0-5 locked
+int cameraState = 0; // -1 free cam, >= 0 locked
 float yaw = -90.0f;
-float pitch = -89.0f;
+float pitch = -89.0f; // avoid 90 or -90
+const std::string bodyNames[] = {"SUN", "MERCURY", "VENUS", "EARTH", "MOON"};
 
 glm::vec3 cameraPos;
-// Where I am looking
+// Where the camera is looking
 glm::vec3 cameraFront;
 // To know which way is up and down
 glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
@@ -85,11 +87,8 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 
 class Object {
     public:
-        GLuint VAO, VBO;
         // PHYSICS
-        // Only used by the transformation matrix
-        // So always draw around 0, 0, 0
-        glm::dvec3 position;
+        glm::dvec3 position; // Only used by the transformation matrix, objects are "drawn" at 0, 0, 0 and then moved
         glm::dvec3 velocity;
         double realRadius;
         double mass;
@@ -111,39 +110,6 @@ class Object {
             
             // Scale the real radius down so OpenGL can draw it
             this->renderRadius = static_cast<float>(realRadius / DISTANCE_SCALE) * RADIUS_SCALE; 
-            std::vector<float> vertices = Draw();
-            vertexCount = vertices.size();
-            CreateVBOVAO(VAO, VBO, vertices.data(), vertexCount);
-        }
-
-        std::vector<float> Draw() {
-            std::vector<float> vertices;
-            int stacks = 30;
-            int sectors = 30;
-            // Get the triangles to form the sphere
-            for(float i = 0.0f; i <= stacks; ++i){
-                float theta1 = (i / stacks) * glm::pi<float>();
-                float theta2 = (i+1) / stacks * glm::pi<float>();
-                for (float j = 0.0f; j < sectors; ++j){
-                    float phi1 = j / sectors * 2 * glm::pi<float>();
-                    float phi2 = (j+1) / sectors * 2 * glm::pi<float>();
-                    glm::vec3 v1 = sphericalToCartesian(this->renderRadius, theta1, phi1);
-                    glm::vec3 v2 = sphericalToCartesian(this->renderRadius, theta1, phi2);
-                    glm::vec3 v3 = sphericalToCartesian(this->renderRadius, theta2, phi1);
-                    glm::vec3 v4 = sphericalToCartesian(this->renderRadius, theta2, phi2);
-
-                    // Triangle 1: v1-v2-v3
-                    vertices.insert(vertices.end(), {v1.x, v1.y, v1.z}); 
-                    vertices.insert(vertices.end(), {v2.x, v2.y, v2.z});
-                    vertices.insert(vertices.end(), {v3.x, v3.y, v3.z}); 
-                    
-                    // Triangle 2: v2-v4-v3
-                    vertices.insert(vertices.end(), {v2.x, v2.y, v2.z});
-                    vertices.insert(vertices.end(), {v4.x, v4.y, v4.z});
-                    vertices.insert(vertices.end(), {v3.x, v3.y, v3.z});
-                }   
-            }
-            return vertices;
         }
 
         void Accelerate(double accelX, double accelY, double accelZ, double timeStep) {
@@ -154,7 +120,7 @@ class Object {
         void UpdatePos(double timeStep) {
             this->position += this->velocity * timeStep;
         }
-
+        // Not used right now
         float Collisions(Object& other) {
             float dx = other.position[0] - this->position[0];
             float dy = other.position[1] - this->position[1];
@@ -167,9 +133,42 @@ class Object {
         }
 };
 
-std::vector<Object> objs = {};
+// Returns the vertex count so we know how many triangles to draw later
+size_t GenerateUnitSphere(GLuint& VAO, GLuint& VBO) {
+    std::vector<float> vertices;
+    int stacks = 30;
+    int sectors = 30;
+    // We will only "draw" a unit sphere and then change its size with the transformation matrix
+    // This way we only calculate vertices one time
+    float radius = 1.0f; 
 
-GLuint gridVAO, gridVBO;
+    for(float i = 0.0f; i <= stacks; ++i){
+        float theta1 = (i / stacks) * glm::pi<float>();
+        float theta2 = (i+1) / stacks * glm::pi<float>();
+        for (float j = 0.0f; j < sectors; ++j){
+            float phi1 = j / sectors * 2 * glm::pi<float>();
+            float phi2 = (j+1) / sectors * 2 * glm::pi<float>();
+            
+            glm::vec3 v1 = sphericalToCartesian(radius, theta1, phi1);
+            glm::vec3 v2 = sphericalToCartesian(radius, theta1, phi2);
+            glm::vec3 v3 = sphericalToCartesian(radius, theta2, phi1);
+            glm::vec3 v4 = sphericalToCartesian(radius, theta2, phi2);
+
+            vertices.insert(vertices.end(), {v1.x, v1.y, v1.z}); 
+            vertices.insert(vertices.end(), {v2.x, v2.y, v2.z});
+            vertices.insert(vertices.end(), {v3.x, v3.y, v3.z}); 
+            
+            vertices.insert(vertices.end(), {v2.x, v2.y, v2.z});
+            vertices.insert(vertices.end(), {v4.x, v4.y, v4.z});
+            vertices.insert(vertices.end(), {v3.x, v3.y, v3.z});
+        }   
+    }
+    
+    CreateVBOVAO(VAO, VBO, vertices.data(), vertices.size());
+    return vertices.size();
+}
+
+std::vector<Object> objs = {};
 
 int main() {
     GLFWwindow* window = StartGLU();
@@ -224,9 +223,13 @@ int main() {
     float previousTime = glfwGetTime();
     int frameCount = 0;
 
-    while (!glfwWindowShouldClose(window) && running == true) {
+    GLuint sphereVAO, sphereVBO;
+    size_t sphereVertexCount = GenerateUnitSphere(sphereVAO, sphereVBO);
+
+   while (!glfwWindowShouldClose(window) && running == true) {
         processInput(window);
 
+        // Display coordinates
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
@@ -242,17 +245,46 @@ int main() {
 
         ImGui::End();
 
+        // FPS
         float currentFrame = glfwGetTime();
         deltaTime = currentFrame - lastFrame;
         lastFrame = currentFrame;
 
         frameCount++;
         if(currentFrame - previousTime >= 1.0) {
-            std::string title = "GRAVITY SIM | FPS: " + std::to_string(frameCount) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);
+            std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);
+            if(cameraState != -1) {
+                title += + " | CURRENT BODY: " + bodyNames[cameraState/2];
+            }        
             glfwSetWindowTitle(window, title.c_str());
             fps = frameCount;
             frameCount = 0;
             previousTime = currentFrame;
+        }
+
+        // Gravity
+        for(auto& obj : objs) {
+            // Calculate the total gravitational pull on this object
+            glm::dvec3 totalAcceleration(0.0);
+            
+            for(auto& obj2 : objs) {
+                if(&obj != &obj2) {
+                    glm::dvec3 diff = obj2.position - obj.position;
+                    double distance = glm::length(diff);
+                    
+                    if (distance > 0.1) { // I don't like dividing by 0
+                        glm::dvec3 direction = glm::normalize(diff);
+                        // F = G(m1 * m2) / r^2
+                        double force = (G * obj.mass * obj2.mass) / (distance * distance);
+                        double accel = force / obj.mass;
+                        totalAcceleration += direction * accel;
+                    }
+                }
+            }
+
+            double timeStep = deltaTime * TIME_SCALE; // Speed up time
+            obj.Accelerate(totalAcceleration.x, totalAcceleration.y, totalAcceleration.z, timeStep);
+            obj.UpdatePos(timeStep);
         }
 
         // --- CAMERA TRACKING ---
@@ -285,31 +317,11 @@ int main() {
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         UpdateCam(shaderProgram, cameraPos);
+        glBindVertexArray(sphereVAO);
+        
         // Draw the triangles / sphere
         for(auto& obj : objs) {
             glUniform4f(objectColorLoc, obj.color.r, obj.color.g, obj.color.b, obj.color.a);
-
-            // Calculate the total gravitational pull on this object
-            glm::dvec3 totalAcceleration(0.0);
-            
-            for(auto& obj2 : objs) {
-                if(&obj != &obj2) {
-                    glm::dvec3 diff = obj2.position - obj.position;
-                    double distance = glm::length(diff);
-                    
-                    if (distance > 0.1) { // I don't like dividing by 0
-                        glm::dvec3 direction = glm::normalize(diff);
-                        // F = G(m1 * m2) / r^2
-                        double force = (G * obj.mass * obj2.mass) / (distance * distance);
-                        double accel = force / obj.mass;
-                        totalAcceleration += direction * accel;
-                    }
-                }
-            }
-
-            double timeStep = deltaTime * TIME_SCALE; // Speed up time
-            obj.Accelerate(totalAcceleration.x, totalAcceleration.y, totalAcceleration.z, timeStep);
-            obj.UpdatePos(timeStep);
 
             // Scale down for drawing
             glm::vec3 scaledPosition(
@@ -321,28 +333,25 @@ int main() {
             glm::mat4 model = glm::mat4(1.0f);
             model = glm::translate(model, scaledPosition); 
 
-            if(obj.planet) {
-                model = glm::scale(model, glm::vec3(PLANET_RADIUS_SCALE));
-            }
+            float finalScale = obj.renderRadius;
+            if(obj.planet) finalScale *= PLANET_RADIUS_SCALE;
+            
+            model = glm::scale(model, glm::vec3(finalScale));
 
             glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
             
-            glBindVertexArray(obj.VAO);
-            glDrawArrays(GL_TRIANGLES, 0, obj.vertexCount / 3);
+            // Draw the currently bound VAO
+            glDrawArrays(GL_TRIANGLES, 0, sphereVertexCount / 3);
         }
+        
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
 
-    for (auto& obj : objs) {
-        glDeleteVertexArrays(1, &obj.VAO);
-        glDeleteBuffers(1, &obj.VBO);
-    }
-
-    glDeleteVertexArrays(1, &gridVAO);
-    glDeleteBuffers(1, &gridVBO);
+    glDeleteVertexArrays(1, &sphereVAO);
+    glDeleteBuffers(1, &sphereVBO);
 
     glDeleteProgram(shaderProgram);
     glfwTerminate();
@@ -421,6 +430,7 @@ GLuint CreateShaderProgram(const char* vertexSource, const char* fragmentSource)
 
     return shaderProgram;
 }
+
 void CreateVBOVAO(GLuint& VAO, GLuint& VBO, const float* vertices, size_t vertexCount) {
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
@@ -490,30 +500,41 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     // Time Scale
     if (key == GLFW_KEY_UP && action == GLFW_PRESS) {
         TIME_SCALE += 100000;
-        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);;
+        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);
+        if(cameraState != -1) {
+            title += + " | CURRENT BODY: " + bodyNames[cameraState/2];
+        }
         glfwSetWindowTitle(window, title.c_str());
     }
     if (key == GLFW_KEY_DOWN && action == GLFW_PRESS) {
         TIME_SCALE -= 100000;
-        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);;
+        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);
+        if(cameraState != -1) {
+            title += + " | CURRENT BODY: " + bodyNames[cameraState/2];
+        }
         glfwSetWindowTitle(window, title.c_str());
     }
 
     // Planet Radius Scale
     if (key == GLFW_KEY_9 && action == GLFW_PRESS) {
         PLANET_RADIUS_SCALE *= 2.0;
-        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);;
+        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);
+        if(cameraState != -1) {
+            title += + " | CURRENT BODY: " + bodyNames[cameraState/2];
+        }        
         glfwSetWindowTitle(window, title.c_str());
     }
     if (key == GLFW_KEY_2 && action == GLFW_PRESS) {
         PLANET_RADIUS_SCALE /= 2.0;
-        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);;
+        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);
+        if(cameraState != -1) {
+            title += + " | CURRENT BODY: " + bodyNames[cameraState/2];
+        }        
         glfwSetWindowTitle(window, title.c_str());
     }
 
     // Camera State 
     if ((key == GLFW_KEY_RIGHT || key == GLFW_KEY_LEFT) && action == GLFW_PRESS) {
-        // Change the 6 to 10 (5 objects * 2 views each)
         if (key == GLFW_KEY_RIGHT) {
             if (cameraState == -1) cameraState = 0;
             else cameraState = (cameraState + 1) % 10; 
@@ -532,6 +553,11 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         front.y = sin(glm::radians(pitch));
         front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
         cameraFront = glm::normalize(front);
+        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);
+        if(cameraState != -1) {
+            title += + " | CURRENT BODY: " + bodyNames[cameraState/2];
+        }        
+        glfwSetWindowTitle(window, title.c_str());
     }
 }
 
