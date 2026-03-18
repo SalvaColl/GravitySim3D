@@ -53,8 +53,9 @@ const double RADIUS_SCALE = 1.0;
 double PLANET_RADIUS_SCALE = 8.0;
 double TIME_SCALE = 100'000.0;
 double TOP_VIEW_SCALE = 1.0;
+bool compactView = false;
 
-// --- CAMMERA STATE --- 
+// --- CAMERA STATE --- 
 int cameraState = 0; // -1 free cam, >= 0 locked
 bool drawingOrbit = false;
 int orbitState = -1; // -1 not drawing, >= 0 drawing
@@ -139,10 +140,18 @@ class Object {
         }
 
         void RecordTrailPoint() {
+            glm::dvec3 pos = position;
+            double dist = glm::length(pos);
+            if (compactView && dist > 1000.0) {
+                double distAU = dist / AU;
+                double compressedAU = std::sqrt(distAU);
+                pos = glm::normalize(pos) * (compressedAU * AU);
+            }
+
             glm::vec3 scaledPos(
-                position.x / DISTANCE_SCALE,
-                position.y / DISTANCE_SCALE,
-                position.z / DISTANCE_SCALE
+                pos.x / DISTANCE_SCALE,
+                pos.y / DISTANCE_SCALE,
+                pos.z / DISTANCE_SCALE
             );
 
             // Only add a point if we moved far enough (0.5 units)
@@ -216,8 +225,33 @@ size_t GenerateUnitSphere(GLuint& VAO, GLuint& VBO) {
     return vertices.size();
 }
 
+glm::vec3 GetRenderPosition(const Object& obj, bool compact) {
+    glm::dvec3 pos = obj.position;
+    
+    if (compact) {
+        double dist = glm::length(pos);
+        
+        if (dist > (0.1 * AU)) { 
+            double distAU = dist / AU;
+            double compressedAU = std::sqrt(distAU); 
+            
+            double scaleFactor = (compressedAU * AU) / dist;
+            pos *= scaleFactor;
+        }
+    }
+    
+    return glm::vec3(
+        pos.x / DISTANCE_SCALE,
+        pos.y / DISTANCE_SCALE,
+        pos.z / DISTANCE_SCALE
+    );
+}
+
 std::vector<Object> objs = {};
-const std::string bodyNames[] = {"SUN", "MERCURY", "VENUS", "EARTH", "MOON"};
+const std::string bodyNames[] = {
+    "SUN", "MERCURY", "VENUS", "EARTH", "MOON",
+    "MARS", "JUPITER", "SATURN", "URANUS", "NEPTUNE"
+};
 
 int main() {
     GLFWwindow* window = StartGLU();
@@ -266,7 +300,22 @@ int main() {
         Object(glm::dvec3(AU, 0.0, 0.0), glm::dvec3(0.0, 0.0, 29780.0), EARTH_MASS, EARTH_RADIUS, glm::vec4(0.0f, 0.5f, 1.0f, 1.0f), true),
 
         // MOON:
-        Object(glm::dvec3(AU + LUNAR_DISTANCE, 0.0, 0.0), glm::dvec3(0.0, 0.0, 29780.0 + LUNAR_VELOCITY), MOON_MASS, MOON_RADIUS, glm::vec4(0.7f, 0.7f, 0.7f, 1.0f), true)
+        Object(glm::dvec3(AU + LUNAR_DISTANCE, 0.0, 0.0), glm::dvec3(0.0, 0.0, 29780.0 + LUNAR_VELOCITY), MOON_MASS, MOON_RADIUS, glm::vec4(0.7f, 0.7f, 0.7f, 1.0f), true),
+
+        // MARS 
+        Object(glm::dvec3(1.524 * AU, 0.0, 0.0), glm::dvec3(0.0, 0.0, 24070.0), 6.39e23, 3389500.0, glm::vec4(0.8f, 0.3f, 0.1f, 1.0f), true),
+
+        // JUPITER
+        Object(glm::dvec3(5.204 * AU, 0.0, 0.0), glm::dvec3(0.0, 0.0, 13060.0), 1.898e27, 69911000.0, glm::vec4(0.8f, 0.7f, 0.6f, 1.0f), true),
+
+        // SATURN 
+        Object(glm::dvec3(9.573 * AU, 0.0, 0.0), glm::dvec3(0.0, 0.0, 9680.0), 5.683e26, 58232000.0, glm::vec4(0.9f, 0.8f, 0.6f, 1.0f), true),
+
+        // URANUS 
+        Object(glm::dvec3(19.165 * AU, 0.0, 0.0), glm::dvec3(0.0, 0.0, 6800.0), 8.681e25, 25362000.0, glm::vec4(0.5f, 0.8f, 0.9f, 1.0f), true),
+
+        // NEPTUNE 
+        Object(glm::dvec3(30.178 * AU, 0.0, 0.0), glm::dvec3(0.0, 0.0, 5430.0), 1.024e26, 24622000.0, glm::vec4(0.2f, 0.3f, 0.8f, 1.0f), true)
     };
 
     float previousTime = glfwGetTime();
@@ -301,11 +350,10 @@ int main() {
 
         frameCount++;
         if(currentFrame - previousTime >= 1.0) {
-            std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);
+            std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string((long long)TIME_SCALE) + " | PLANET SCALE: " + std::to_string((int)PLANET_RADIUS_SCALE);
             if(cameraState != -1) {
-                title += + " | CURRENT BODY: " + bodyNames[cameraState/2];
-            }        
-            glfwSetWindowTitle(window, title.c_str());
+                title += " | CURRENT BODY: " + bodyNames[cameraState/2];
+            }
             fps = frameCount;
             frameCount = 0;
             previousTime = currentFrame;
@@ -344,11 +392,7 @@ int main() {
             int targetIdx = cameraState / 2;      
             bool isTopView = (cameraState % 2 == 0); 
         
-            glm::vec3 targetPos = glm::vec3(
-                objs[targetIdx].position.x / DISTANCE_SCALE,
-                objs[targetIdx].position.y / DISTANCE_SCALE,
-                objs[targetIdx].position.z / DISTANCE_SCALE
-            );
+            glm::vec3 targetPos = GetRenderPosition(objs[targetIdx], compactView);
             
             // Actual render size right now
             float currentVisualRadius = objs[targetIdx].renderRadius;
@@ -356,14 +400,15 @@ int main() {
 
             if (isTopView) {
                 float viewDist;
-                if (targetIdx == 0) viewDist = (AU / DISTANCE_SCALE) * 3.0f; // Sun Top View
-                else if (targetIdx == 1) viewDist = (LUNAR_DISTANCE / DISTANCE_SCALE) * 5.0f; // Earth Top View
-                else viewDist = (LUNAR_DISTANCE / DISTANCE_SCALE) * 5.0f; // Moon Top View
+                if (targetIdx == 0) {
+                    viewDist = (AU / DISTANCE_SCALE) * 3.0f;
+                } else {
+                    viewDist = currentVisualRadius * 50.0f; 
+                }
                 
                 cameraPos = targetPos + glm::vec3(0.0f, viewDist, 0.0f);
             } else {
-                // Side View for any object
-                cameraPos = targetPos + glm::vec3(0.0f, 0.0f, currentVisualRadius * 3.0f);
+                cameraPos = targetPos + glm::vec3(0.0f, 0.0f, currentVisualRadius * 4.0f);
             }
         }
 
@@ -376,11 +421,7 @@ int main() {
             glUniform4f(objectColorLoc, obj.color.r, obj.color.g, obj.color.b, obj.color.a);
 
             // Scale down for drawing
-            glm::vec3 scaledPosition(
-                obj.position.x / DISTANCE_SCALE,
-                obj.position.y / DISTANCE_SCALE,
-                obj.position.z / DISTANCE_SCALE
-            );
+            glm::vec3 scaledPosition = GetRenderPosition(obj, compactView);
 
             glm::mat4 model = glm::mat4(1.0f);
             model = glm::translate(model, scaledPosition); 
@@ -567,17 +608,17 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     // Time Scale
     if (key == GLFW_KEY_UP && action == GLFW_PRESS) {
         TIME_SCALE += 100000;
-        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);
+        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string((long long)TIME_SCALE) + " | PLANET SCALE: " + std::to_string((int)PLANET_RADIUS_SCALE);
         if(cameraState != -1) {
-            title += + " | CURRENT BODY: " + bodyNames[cameraState/2];
+            title += " | CURRENT BODY: " + bodyNames[cameraState/2];
         }
         glfwSetWindowTitle(window, title.c_str());
     }
     if (key == GLFW_KEY_DOWN && action == GLFW_PRESS) {
         TIME_SCALE -= 100000;
-        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);
+        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string((long long)TIME_SCALE) + " | PLANET SCALE: " + std::to_string((int)PLANET_RADIUS_SCALE);
         if(cameraState != -1) {
-            title += + " | CURRENT BODY: " + bodyNames[cameraState/2];
+            title += " | CURRENT BODY: " + bodyNames[cameraState/2];
         }
         glfwSetWindowTitle(window, title.c_str());
     }
@@ -585,17 +626,17 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     // Planet Radius Scale
     if (key == GLFW_KEY_9 && action == GLFW_PRESS) {
         PLANET_RADIUS_SCALE *= 2.0;
-        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);
+        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string((long long)TIME_SCALE) + " | PLANET SCALE: " + std::to_string((int)PLANET_RADIUS_SCALE);
         if(cameraState != -1) {
-            title += + " | CURRENT BODY: " + bodyNames[cameraState/2];
+            title += " | CURRENT BODY: " + bodyNames[cameraState/2];
         }        
         glfwSetWindowTitle(window, title.c_str());
     }
     if (key == GLFW_KEY_2 && action == GLFW_PRESS) {
         PLANET_RADIUS_SCALE /= 2.0;
-        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);
+        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string((long long)TIME_SCALE) + " | PLANET SCALE: " + std::to_string((int)PLANET_RADIUS_SCALE);
         if(cameraState != -1) {
-            title += + " | CURRENT BODY: " + bodyNames[cameraState/2];
+            title += " | CURRENT BODY: " + bodyNames[cameraState/2];
         }        
         glfwSetWindowTitle(window, title.c_str());
     }
@@ -604,10 +645,10 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     if ((key == GLFW_KEY_RIGHT || key == GLFW_KEY_LEFT) && action == GLFW_PRESS) {
         if (key == GLFW_KEY_RIGHT) {
             if (cameraState == -1) cameraState = 0;
-            else cameraState = (cameraState + 1) % 10; 
+            else cameraState = (cameraState + 1) % 20; 
         } else {
-            if (cameraState == -1) cameraState = 9;
-            else cameraState = (cameraState - 1 + 10) % 10; 
+            if (cameraState == -1) cameraState = 19;
+            else cameraState = (cameraState - 1 + 20) % 20; 
         }
 
         bool isTopView = (cameraState % 2 == 0);
@@ -620,9 +661,10 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         front.y = sin(glm::radians(pitch));
         front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
         cameraFront = glm::normalize(front);
-        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string(TIME_SCALE) + " | PLANET SCALE: " + std::to_string(PLANET_RADIUS_SCALE);
+        
+        std::string title = "GRAVITY SIM | FPS: " + std::to_string(fps) + " | TIME SCALE: " + std::to_string((long long)TIME_SCALE) + " | PLANET SCALE: " + std::to_string((int)PLANET_RADIUS_SCALE);
         if(cameraState != -1) {
-            title += + " | CURRENT BODY: " + bodyNames[cameraState/2];
+            title += " | CURRENT BODY: " + bodyNames[cameraState/2];
         }        
         glfwSetWindowTitle(window, title.c_str());
     }
@@ -643,6 +685,15 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
                 orbitState = targetIdx;
                 objs[targetIdx].ClearTrail();
             }
+        }
+    }
+
+    // Compact View
+    if (key == GLFW_KEY_C && action == GLFW_PRESS) {
+        compactView = !compactView;
+        
+        if (drawingOrbit && orbitState != -1) {
+            objs[orbitState].ClearTrail();
         }
     }
 }
