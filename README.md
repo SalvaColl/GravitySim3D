@@ -41,4 +41,14 @@ This project uses Newtonian physics and numerical integration to calculate the g
 * **Mathematics:** [GLM](https://github.com/g-truc/glm) 
 * **GUI:** [Dear ImGui](https://github.com/ocornut/imgui)
 
-Everything is ready in the download, just set up a C++ compiler and type ./build in the terminal
+## Building and running
+
+The repository includes a **Windows build script**. Clone the repository and run it from the project folder:
+
+```powershell
+git clone https://github.com/SalvaColl/GravitySim3D.git
+cd GravitySim3D
+.\build.bat
+```
+
+Use a compatible C++ toolchain and ensure the required library headers, binaries, and include paths match the assumptions in `build.bat`.
